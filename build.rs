@@ -59,7 +59,9 @@ fn link_opus(is_static: bool, opus_build_dir: impl Display) {
         is_static_text, opus_build_dir
     );
     println!("cargo:rustc-link-lib={}=opus", is_static_text);
+    // GNUInstallDirs puts the built library in `lib64` on Fedora-family systems and `lib` elsewhere — searching only `lib` broke every static build on lib64 distros ("could not find native static library opus").
     println!("cargo:rustc-link-search=native={}/lib", opus_build_dir);
+    println!("cargo:rustc-link-search=native={}/lib64", opus_build_dir);
 }
 
 #[cfg(any(unix, target_env = "gnu"))]
