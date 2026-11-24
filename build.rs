@@ -123,9 +123,61 @@ fn is_static_build() -> bool {
     }
 }
 
+/// One source list from libopus's own make fragments (`NAME = \` then a path a line), so an Opus update brings its file list with it.
+fn opus_sources(opus: &Path, fragment: &str, name: &str) -> Vec<String> {
+    let text = std::fs::read_to_string(opus.join(fragment)).expect("an Opus source list");
+    let mut lines = text.lines().skip_while(|l| !l.starts_with(&format!("{name} =")));
+    let mut out = Vec::new();
+    let mut more = lines.next().is_some_and(|l| l.trim_end().ends_with('\\'));
+    while more {
+        let Some(l) = lines.next() else { break };
+        let l = l.trim_end();
+        more = l.ends_with('\\');
+        let path = l.trim_end_matches('\\').trim();
+        if !path.is_empty() {
+            out.push(path.to_string());
+        }
+    }
+    assert!(!out.is_empty(), "no sources under {} in {}", name, fragment);
+    out
+}
+
+/// ferros (a JSON target, no CMake, no C library but the few calls its runtime exports: malloc, free and the mem functions): libopus built with the `cc` crate and the compiler and flags ferros's build exports (`CC_aarch64_unknown_ferros`, `CFLAGS_aarch64_unknown_ferros`).
+/// Fixed point and no float API: ferros exports no C maths library, the fixed-point build calls none, and the float entry points would (their float-to-int conversion falls back to floor). Photon speaks i16 to Opus everywhere. The sysroot's stdlib.h declares no `abs`, so it is the compiler's. Arrays on the stack are C99 VLAs, not `alloca`.
+fn build_opus_ferros() {
+    let opus = Path::new("opus");
+    let mut sources = opus_sources(opus, "opus_sources.mk", "OPUS_SOURCES");
+    sources.extend(opus_sources(opus, "celt_sources.mk", "CELT_SOURCES"));
+    sources.extend(opus_sources(opus, "silk_sources.mk", "SILK_SOURCES"));
+    sources.extend(opus_sources(opus, "silk_sources.mk", "SILK_SOURCES_FIXED"));
+    let mut build = cc::Build::new();
+    for s in &sources {
+        build.file(opus.join(s));
+        println!("cargo:rerun-if-changed=opus/{s}");
+    }
+    build
+        .include(opus.join("include"))
+        .include(opus.join("celt"))
+        .include(opus.join("silk"))
+        .include(opus.join("silk/fixed"))
+        .define("OPUS_BUILD", None)
+        .define("FIXED_POINT", None)
+        .define("DISABLE_FLOAT_API", None)
+        .define("VAR_ARRAYS", None)
+        .define("abs", "__builtin_abs")
+        .warnings(false)
+        .compile("opus");
+    println!("cargo:info=Built Opus for ferros with cc: fixed point, {} sources.", sources.len());
+}
+
 fn main() {
     #[cfg(feature = "generate_binding")]
     generate_binding();
+
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("ferros") {
+        build_opus_ferros();
+        return;
+    }
 
     let is_static = is_static_build();
 
